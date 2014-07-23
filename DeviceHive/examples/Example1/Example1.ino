@@ -4,6 +4,8 @@
 #define CMD_STATUS_FAILED       "Failed"
 #define CMD_RESULT_OK           "OK"
 
+const char *ALLJOYN_CHANNEL = "com.devicehive.samples.alljoyn.serial.arduino";
+
 // device registration data
 // intent numbers should be greater than 255!
 // please refer to http://www.devicehive.com/binary/#SystemMessages/RegisterJson for complete syntax of registration info
@@ -50,6 +52,20 @@ void sendButtonState(int state)
     DH.write(tx_msg);
 }
 
+void sendAllJoynInfoResponse(void)
+{
+    OutputMessage tx_msg(30002);
+    tx_msg.putString(ALLJOYN_CHANNEL);
+    DH.write(tx_msg);
+}
+
+void sendAllJoynSystemExec(const char *cmd)
+{
+    OutputMessage tx_msg(30004);
+    tx_msg.putString(cmd);
+    DH.write(tx_msg);
+}
+
 
 InputMessage rx_msg; // received message
 int old_btn_state;
@@ -65,7 +81,8 @@ void setup(void)
 
     Serial.begin(115200);
     DH.begin(Serial);
-    DH.writeRegistrationResponse(REG_DATA);
+    //DH.writeRegistrationResponse(REG_DATA);
+    sendAllJoynInfoResponse();
 }
 
 
@@ -116,6 +133,17 @@ void loop(void)
                 }
 
                 DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
+            } break;
+
+
+            case 30001: // alljoyn info request
+                sendAllJoynInfoResponse();
+                break;
+
+            case 30003: // alljoyn session status
+            {
+                int state = rx_msg.getByte();
+                setLedState(state);
             } break;
         }
 
