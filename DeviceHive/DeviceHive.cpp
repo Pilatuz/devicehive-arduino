@@ -217,33 +217,12 @@ uint8_t InputMessageEx::getUInt8()
 DeviceHive::DeviceHive()
     : stream(0)
     , rx_timeout(1000)
-    , rx_msg(new InputMessage)
-    , is_buffer_ext(false)
     , rx_state(STATE_SIGNATURE1)
     , rx_msg_len(0)
     , rx_checksum(0)
     , rx_started_at(0)
     , last_cmd_processor(-1)
 {}
-
-DeviceHive::DeviceHive(InputMessageEx* msg)
-    : stream(0)
-    , rx_timeout(1000)
-    , rx_msg(msg)
-    , is_buffer_ext(true)
-    , rx_state(STATE_SIGNATURE1)
-    , rx_msg_len(0)
-    , rx_checksum(0)
-    , rx_started_at(0)
-    , last_cmd_processor(-1)
-{}
-
-DeviceHive::~DeviceHive()
-{
-    if (!is_buffer_ext)
-        delete rx_msg;
-    rx_msg = 0;
-}
 
 // set RX timeout, milliseconds, 0 - no timeout
 void DeviceHive::setRxTimeout(unsigned long ms)
@@ -253,16 +232,19 @@ void DeviceHive::setRxTimeout(unsigned long ms)
 
 
 // prepare engine with Serial stream
-void DeviceHive::begin(Stream *stream)
+void DeviceHive::begin(Stream *stream, const char *reg_data, InputMessageEx* msg)
 {
     this->stream = stream;
+    this->reg_data = reg_data;
+    rx_msg = msg ? msg : (new InputMessage);
+    is_buffer_ext = (msg != 0);    
 }
 
 
 // prepare engine with Serial stream
-void DeviceHive::begin(Stream &stream)
+void DeviceHive::begin(Stream &stream, const char *reg_data, InputMessageEx* msg)
 {
-    begin(&stream);
+    begin(&stream, reg_data, msg);
 }
 
 
@@ -274,6 +256,9 @@ void DeviceHive::end()
         stream->flush();
         stream = 0;
     }
+    if (!is_buffer_ext)
+        delete rx_msg;
+    rx_msg = 0;
 }
 
 
@@ -515,22 +500,19 @@ void DeviceHive::writeChecksum(unsigned int checksum)
     stream->write(0xFF - (checksum&0xFF));
 }
 
-int DeviceHive::registerCallback(const int id, CallbackType f)
+void DeviceHive::registerCallback(int id, CallbackType f)
 {
     // rewrite a command processor if a function with such ID is already registered
     int registeredProcessorIndex = findCmdProcessorIndex(id);
     if (registeredProcessorIndex >= 0)
     {
         cmd_processors[registeredProcessorIndex].func = f;
-        return REGSTATE_SUCCESS;
+        return;
     }
     
     // try to add a command processor at the end of array
     if (last_cmd_processor <= CMD_PROCESSOR_COUNT)
-    {
         cmd_processors[++last_cmd_processor] = CmdProcessor(id, f);
-        return REGSTATE_SUCCESS;
-    }
     else
     {
         // find first free element of registered processors' array
@@ -539,14 +521,11 @@ int DeviceHive::registerCallback(const int id, CallbackType f)
         {
             cmd_processors[freeProcessorIndex].id = id;
             cmd_processors[freeProcessorIndex].func = f;
-            return REGSTATE_SUCCESS;
         }
-        else
-            return REGSTATE_FAILED;
     }
 }
 
-void DeviceHive::unregisterCallback(const int id)
+void DeviceHive::unregisterCallback(int id)
 {
     int cmdProcessorIndex = findCmdProcessorIndex(id);
     if (cmdProcessorIndex >= 0)
@@ -556,7 +535,7 @@ void DeviceHive::unregisterCallback(const int id)
     }
 }
 
-int DeviceHive::findCmdProcessorIndex(const int id)
+int DeviceHive::findCmdProcessorIndex(int id)
 {
     for (int i = 0; i <= last_cmd_processor; ++i)
     {
@@ -566,7 +545,7 @@ int DeviceHive::findCmdProcessorIndex(const int id)
     return -1;
 }
 
-DeviceHive::CallbackType DeviceHive::findCmdProcessor(const int id)
+DeviceHive::CallbackType DeviceHive::findCmdProcessor(int id)
 {
     int cmdProcessorIndex = findCmdProcessorIndex(id);
     return (cmdProcessorIndex >= 0) ? cmd_processors[cmdProcessorIndex].func : 0;
@@ -574,15 +553,20 @@ DeviceHive::CallbackType DeviceHive::findCmdProcessor(const int id)
 
 void DeviceHive::process()
 {
-    if (read(rx_msg) == DH_PARSE_OK)
+    if (read(*rx_msg) == DH_PARSE_OK)
     {
-        DeviceHive::CallbackType cmdProcessor = findCmdProcessor(rx_msg.intent);
-        const long cmd_id = rx_msg.getLong();
-        if (cmdProcessor)
-            cmdProcessor(rx_msg, cmd_id);
+        if (rx_msg->intent == INTENT_REGISTRATION_REQUEST)
+            writeRegistrationResponse(reg_data);
         else
-            writeCommandResult(cmd_id, CMD_STATUS_FAILED, CMD_RESULT_UNKNOWN_COMMAND);
-        rx_msg.reset(); // reset for the next message parsing
+        {
+            DeviceHive::CallbackType cmdProcessor = findCmdProcessor(rx_msg->intent);
+            const long cmd_id = rx_msg->getLong();
+            if (cmdProcessor)
+                cmdProcessor(*rx_msg, cmd_id);
+            else
+                writeCommandResult(cmd_id, CMD_STATUS_FAILED, CMD_RESULT_UNKNOWN_COMMAND);
+        }
+        rx_msg->reset(); // reset for the next message parsing
     }
 }
 

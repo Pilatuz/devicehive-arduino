@@ -69,11 +69,6 @@ enum LcdKeys
     KEY_SELECT  = 0x10
 };
 
-void sendRegistrationResponse(InputMessageEx& rx_msg, const long cmd_id)
-{
-    DH.writeRegistrationResponse(REG_DATA);
-}
-
 void processSetMsg(InputMessageEx& rx_msg, const long cmd_id)
 {
     const byte state = rx_msg.getByte();
@@ -137,10 +132,9 @@ void setup(void)
     old_btn_state = digitalRead(BTN_PIN);
 
     Serial.begin(115200);
-    DH.begin(Serial);
+    DH.begin(Serial, REG_DATA);
     DH.writeRegistrationResponse(REG_DATA);
     
-    DH.registerCallback(INTENT_REGISTRATION_REQUEST, sendRegistrationResponse); // registration data needed
     DH.registerCallback(1000, processSetMsg); // "set" - sets the LED state
     DH.registerCallback(1001, processBlinkMsg); // "blink" - blinks the LED
     DH.registerCallback(1002, processTextMsg); // "text"

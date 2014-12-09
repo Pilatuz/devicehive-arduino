@@ -191,18 +191,16 @@ class DeviceHive
 {
 public:
     DeviceHive();
-    DeviceHive(InputMessageEx* msg);
-    virtual ~DeviceHive();
 
     void setRxTimeout(unsigned long ms);
 
-    void begin(Stream *stream);
-    void begin(Stream &stream);
+    void begin(Stream *stream, const char *reg_data, InputMessageEx* msg = 0);
+    void begin(Stream &stream, const char *reg_data, InputMessageEx* msg = 0);
     void end();
 
     typedef void (*CallbackType)(InputMessageEx&, const long);
-    int registerCallback(const int id, CallbackType f);
-    void unregisterCallback(const int id);
+    void registerCallback(int id, CallbackType f);
+    void unregisterCallback(int id);
     void process();
 
 public:
@@ -226,8 +224,8 @@ public:
     void writeChecksum(unsigned int checksum);
     
 private:
-    int findCmdProcessorIndex(const int id);
-    CallbackType findCmdProcessor(const int id);
+    int findCmdProcessorIndex(int id);
+    CallbackType findCmdProcessor(int id);
 
 private:
     Stream *stream;             // Serial stream
@@ -249,12 +247,6 @@ private:
         STATE_CHECKSUM
     };
     
-    enum RegisterState
-    {
-        REGSTATE_FAILED = 0,
-        REGSTATE_SUCCESS = 0
-    };
-
     struct CmdProcessor
     {
         CmdProcessor(): id(0), func(0)
@@ -269,6 +261,7 @@ private:
         CallbackType func;
     };
 
+    const char*     reg_data;         // device registration data
     InputMessageEx* rx_msg;           // received message
     bool            is_buffer_ext;    // is received message buffer external
     ParserState     rx_state;         // RX parser state
