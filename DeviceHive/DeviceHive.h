@@ -9,6 +9,11 @@
 #   define MAX_MSG_SIZE 256
 #endif // MAX_MSG_SIZE
 
+#define CMD_STATUS_SUCCESS          "Success"
+#define CMD_STATUS_FAILED           "Failed"
+#define CMD_RESULT_OK               "OK"
+#define CMD_RESULT_UNKNOWN_COMMAND  "UNKNOWN_COMMAND" 
+
 // basic message, uses external buffer
 class Message
 {
@@ -181,18 +186,24 @@ enum ParseResult
     DH_PARSE_NO_SERIAL
 };
 
-
 // engine: read/write messages from/to serial stream
 class DeviceHive
 {
 public:
     DeviceHive();
+    DeviceHive(InputMessageEx* msg);
+    virtual ~DeviceHive();
 
     void setRxTimeout(unsigned long ms);
 
     void begin(Stream *stream);
     void begin(Stream &stream);
     void end();
+
+    typedef void (*CallbackType)(InputMessageEx&, const long);
+    int registerCallback(const int id, CallbackType f);
+    void unregisterCallback(const int id);
+    void process();
 
 public:
     int read(Message *msg);
@@ -213,10 +224,16 @@ public:
     unsigned int writeUInt32(uint32_t val);
     unsigned int writeUInt16(uint16_t val);
     void writeChecksum(unsigned int checksum);
+    
+private:
+    int findCmdProcessorIndex(const int id);
+    CallbackType findCmdProcessor(const int id);
 
 private:
     Stream *stream;             // Serial stream
     unsigned int rx_timeout;    // RX timeout, milliseconds
+    
+    static const int CMD_PROCESSOR_COUNT = 16;
 
     enum ParserState            // possible parser states
     {
@@ -231,11 +248,35 @@ private:
         STATE_PAYLOAD,
         STATE_CHECKSUM
     };
+    
+    enum RegisterState
+    {
+        REGSTATE_FAILED = 0,
+        REGSTATE_SUCCESS = 0
+    };
 
-    ParserState   rx_state;         // RX parser state
-    uint16_t      rx_msg_len;       // expected message payload length
-    unsigned int  rx_checksum;      // RX checksum register
-    unsigned long rx_started_at;    // RX message start time, milliseconds
+    struct CmdProcessor
+    {
+        CmdProcessor(): id(0), func(0)
+        {
+        }
+        
+        CmdProcessor(int num, CallbackType f): id(num), func(f)
+        {
+        }
+
+        int id;
+        CallbackType func;
+    };
+
+    InputMessageEx* rx_msg;           // received message
+    bool            is_buffer_ext;    // is received message buffer external
+    ParserState     rx_state;         // RX parser state
+    uint16_t        rx_msg_len;       // expected message payload length
+    unsigned int    rx_checksum;      // RX checksum register
+    unsigned long   rx_started_at;    // RX message start time, milliseconds
+    CmdProcessor    cmd_processors[CMD_PROCESSOR_COUNT];
+    int             last_cmd_processor;
 };
 
 

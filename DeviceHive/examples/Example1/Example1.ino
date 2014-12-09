@@ -17,7 +17,9 @@ const char *REG_DATA = "{"
     "equipment:[{code:'led',name:'led',type:'led'}],"
     "commands:["
         "{intent:1000,name:'set',params:u8},"
-        "{intent:1001,name:'blink',params:{on:u16,off:u16,count:u8}}"
+        "{intent:1001,name:'blink',params:{on:u16,off:u16,count:u8}},"
+        "{intent:1002,name:'text',params:s},"
+        "{intent:1003,name:'doubletext',params:{s0:s,s1:s}}"
     "],"
     "notifications:["
         "{intent:2000,name:'button',params:u8}"
@@ -50,15 +52,86 @@ void sendButtonState(int state)
     DH.write(tx_msg);
 }
 
+int lcd_getKey(void);
 
-InputMessage rx_msg; // received message
 int old_btn_state;
+
+#include <LiquidCrystal.h>
+static LiquidCrystal lcd(8, 9, 4, 5, 6, 7); // 4-wire mode
+
+enum LcdKeys
+{
+    KEY_NONE    = 0x00,
+    KEY_RIGHT   = 0x01,
+    KEY_UP      = 0x02,
+    KEY_DOWN    = 0x04,
+    KEY_LEFT    = 0x08,
+    KEY_SELECT  = 0x10
+};
+
+void sendRegistrationResponse(InputMessageEx& rx_msg, const long cmd_id)
+{
+    DH.writeRegistrationResponse(REG_DATA);
+}
+
+void processSetMsg(InputMessageEx& rx_msg, const long cmd_id)
+{
+    const byte state = rx_msg.getByte();
+    setLedState(state);
+    DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
+}
+
+void processBlinkMsg(InputMessageEx& rx_msg, const long cmd_id)
+{
+    BlinkParam params = rx_msg.get<BlinkParam>();
+    // TODO: check for very long delays?
+
+    for (int i = 0; i < params.count; ++i)
+    {
+        setLedState(1);     // ON
+        delay(params.on);
+        setLedState(0);     // OFF
+        delay(params.off);
+    }
+    DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
+}
+
+void processTextMsg(InputMessageEx& rx_msg, const long cmd_id)
+{
+    unsigned int maxLen = rx_msg.length;
+    maxLen -= sizeof(long);
+    char msg[maxLen];
+    rx_msg.getString(msg, maxLen);
+    lcd.clear();
+    lcd.print(msg);
+    DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
+}
+
+void processDoubletextMsg(InputMessageEx& rx_msg, const long cmd_id)
+{
+    char buf[64];
+
+    // print first line
+    rx_msg.getString(buf, sizeof(buf));
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(buf);
+
+    // print second line
+    rx_msg.getString(buf, sizeof(buf));
+    lcd.setCursor(0, 1);
+    lcd.print(buf);
+
+    DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
+}
 
 /**
  * Initializes the Arduino firmware.
  */
 void setup(void)
 {
+    lcd.begin(16, 2);       // start the library
+
     pinMode(LED_PIN, OUTPUT);
     pinMode(BTN_PIN, INPUT_PULLUP); // ... so you don't need a pull-up resistor
     old_btn_state = digitalRead(BTN_PIN);
@@ -66,8 +139,16 @@ void setup(void)
     Serial.begin(115200);
     DH.begin(Serial);
     DH.writeRegistrationResponse(REG_DATA);
+    
+    DH.registerCallback(INTENT_REGISTRATION_REQUEST, sendRegistrationResponse); // registration data needed
+    DH.registerCallback(1000, processSetMsg); // "set" - sets the LED state
+    DH.registerCallback(1001, processBlinkMsg); // "blink" - blinks the LED
+    DH.registerCallback(1002, processTextMsg); // "text"
+    DH.registerCallback(1003, processDoubletextMsg); // "doubletext"
+    
+    lcd.setCursor(0,0);
+    lcd.print("Hello");
 }
-
 
 /**
  * Loop procedure is called continuously.
@@ -75,50 +156,40 @@ void setup(void)
 void loop(void)
 {
     // ned button state change notifications
-    const int btn_state = digitalRead(BTN_PIN);
+    const int btn_state = lcd_getKey();
     if (btn_state != old_btn_state)
     {
-        sendButtonState(btn_state);
-        old_btn_state = btn_state;
-    }
-
-    if (DH.read(rx_msg) == DH_PARSE_OK)
-    {
-        switch (rx_msg.intent)
+        unsigned long now = millis();
+        static unsigned long last = now;
+        if ((now - last) > 500)
         {
-            case INTENT_REGISTRATION_REQUEST:   // registration data needed
-                DH.writeRegistrationResponse(REG_DATA);
-                break;
-
-
-            case 1000: // "set" - sets the LED state
-            {
-                const long cmd_id = rx_msg.getLong();
-                const byte state = rx_msg.getByte();
-
-                setLedState(state);
-                DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
-            } break;
-
-
-            case 1001: // "blink" - blinks the LED
-            {
-                const long cmd_id = rx_msg.getLong();
-                BlinkParam params = rx_msg.get<BlinkParam>();
-                // TODO: check for very long delays?
-
-                for (int i = 0; i < params.count; ++i)
-                {
-                    setLedState(1);     // ON
-                    delay(params.on);
-                    setLedState(0);     // OFF
-                    delay(params.off);
-                }
-
-                DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
-            } break;
+            sendButtonState(btn_state);
+            old_btn_state = btn_state;
+            last = now;
         }
-
-        rx_msg.reset(); // reset for the next message parsing
     }
+
+    DH.process();
+}
+
+/**
+ * @brief Get pressed key on LCD Keypad Shield.
+ * @return The key mask.
+ */
+int lcd_getKey(void)
+{
+    const int key = analogRead(0); // analog pin #0
+
+    if (key < 60)
+        return KEY_RIGHT;
+    else if (key < 200)
+        return KEY_UP;
+    else if (key < 400)
+        return KEY_DOWN;
+    else if (key < 600)
+        return KEY_LEFT;
+    else if (key < 800)
+        return KEY_SELECT;
+
+    return KEY_NONE;
 }

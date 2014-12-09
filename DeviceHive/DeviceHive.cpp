@@ -1,7 +1,7 @@
 #include "DeviceHive.h"
 
 #include <stdlib.h>
-#include <memory.h>
+//#include <memory.h>
 #include <string.h>
 
 #define DH_SIGNATURE1   0xC5
@@ -217,12 +217,33 @@ uint8_t InputMessageEx::getUInt8()
 DeviceHive::DeviceHive()
     : stream(0)
     , rx_timeout(1000)
+    , rx_msg(new InputMessage)
+    , is_buffer_ext(false)
     , rx_state(STATE_SIGNATURE1)
     , rx_msg_len(0)
     , rx_checksum(0)
     , rx_started_at(0)
+    , last_cmd_processor(-1)
 {}
 
+DeviceHive::DeviceHive(InputMessageEx* msg)
+    : stream(0)
+    , rx_timeout(1000)
+    , rx_msg(msg)
+    , is_buffer_ext(true)
+    , rx_state(STATE_SIGNATURE1)
+    , rx_msg_len(0)
+    , rx_checksum(0)
+    , rx_started_at(0)
+    , last_cmd_processor(-1)
+{}
+
+DeviceHive::~DeviceHive()
+{
+    if (!is_buffer_ext)
+        delete rx_msg;
+    rx_msg = 0;
+}
 
 // set RX timeout, milliseconds, 0 - no timeout
 void DeviceHive::setRxTimeout(unsigned long ms)
@@ -494,6 +515,76 @@ void DeviceHive::writeChecksum(unsigned int checksum)
     stream->write(0xFF - (checksum&0xFF));
 }
 
+int DeviceHive::registerCallback(const int id, CallbackType f)
+{
+    // rewrite a command processor if a function with such ID is already registered
+    int registeredProcessorIndex = findCmdProcessorIndex(id);
+    if (registeredProcessorIndex >= 0)
+    {
+        cmd_processors[registeredProcessorIndex].func = f;
+        return REGSTATE_SUCCESS;
+    }
+    
+    // try to add a command processor at the end of array
+    if (last_cmd_processor <= CMD_PROCESSOR_COUNT)
+    {
+        cmd_processors[++last_cmd_processor] = CmdProcessor(id, f);
+        return REGSTATE_SUCCESS;
+    }
+    else
+    {
+        // find first free element of registered processors' array
+        int freeProcessorIndex = findCmdProcessorIndex(0);
+        if (freeProcessorIndex >= 0)
+        {
+            cmd_processors[freeProcessorIndex].id = id;
+            cmd_processors[freeProcessorIndex].func = f;
+            return REGSTATE_SUCCESS;
+        }
+        else
+            return REGSTATE_FAILED;
+    }
+}
+
+void DeviceHive::unregisterCallback(const int id)
+{
+    int cmdProcessorIndex = findCmdProcessorIndex(id);
+    if (cmdProcessorIndex >= 0)
+    {
+        cmd_processors[cmdProcessorIndex].id = 0;
+        cmd_processors[cmdProcessorIndex].func = 0;
+    }
+}
+
+int DeviceHive::findCmdProcessorIndex(const int id)
+{
+    for (int i = 0; i <= last_cmd_processor; ++i)
+    {
+        if (cmd_processors[i].id == id)
+            return i;
+    }
+    return -1;
+}
+
+DeviceHive::CallbackType DeviceHive::findCmdProcessor(const int id)
+{
+    int cmdProcessorIndex = findCmdProcessorIndex(id);
+    return (cmdProcessorIndex >= 0) ? cmd_processors[cmdProcessorIndex].func : 0;
+}
+
+void DeviceHive::process()
+{
+    if (read(rx_msg) == DH_PARSE_OK)
+    {
+        DeviceHive::CallbackType cmdProcessor = findCmdProcessor(rx_msg.intent);
+        const long cmd_id = rx_msg.getLong();
+        if (cmdProcessor)
+            cmdProcessor(rx_msg, cmd_id);
+        else
+            writeCommandResult(cmd_id, CMD_STATUS_FAILED, CMD_RESULT_UNKNOWN_COMMAND);
+        rx_msg.reset(); // reset for the next message parsing
+    }
+}
 
 // global DeviceHive engine instance
 DeviceHive DH;
