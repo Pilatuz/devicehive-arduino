@@ -16,15 +16,18 @@ Typically it is `/dev/ttyUSB0` or `/dev/ttyACM0` (you can verify by running
 `ls /dev/tty*`). These settings can be found in the very end of
 the `basic_gateway_example.py` file.
 
-After you save the file and run it, the gatway code will request Arduino for
+After you save the file and run it, the gateway code will request Arduino for
 it's initialization parameters and pass them to DeviceHive cloud. After that
 you will be able to send command and get notifications to/from your Arduino.
 In this example, the commands are "set" - which will set the state of on-board
-LED connected to pin 13 to on/off (1/0) and "blink" which will accept
+LED connected to pin 13 to on/off (1/0), "blink" which will accept
 a structure which consists of on/off/count fields to set on/off period
-in milliseconds and count (for example: `{"on":500, "off":1000, "count":5}`).
+in milliseconds and count (for example: `{"on":500, "off":1000, "count":5}`), 
+"text" which will accept text message consisting of one text string and display
+it on LCD and "doubletext" which will accept a structure consisting of two text
+strings and display them on LCD.
 In addition to these commands, the sample Arduino code will also be sending
-notifications when pin 12 changes its sate. You can test it by
+notifications when pin 12 changes it's state. You can test it by
 connecting/disconnecting +5V probe to PIN 12 to simulate LOW/HIGH states.
 
 
@@ -49,6 +52,8 @@ const char *REG_DATA = "{"
     "commands:["
         "{intent:1000,name:'set',params:u8},"
         "{intent:1001,name:'blink',params:{on:u16,off:u16,count:u8}}"
+        "{intent:1002,name:'text',params:s},"
+        "{intent:1003,name:'doubletext',params:{s0:s,s1:s}}"
     "],"
     "notifications:["
         "{intent:2000,name:'button',params:u8}"
@@ -89,7 +94,7 @@ struct BlinkParam
 In order to initialize DeviceHive library, you should call in `setup()` function:
 
 ~~~{.cpp}
-DH.begin(Serial);
+DH.begin(Serial, REG_DATA);
 DH.writeRegistrationResponse(REG_DATA);
 ~~~
 
@@ -122,61 +127,102 @@ void sendButtonState(int state)
 To check for new messages from the cloud in the `loop()` function, do this:
 
 ~~~{.cpp}
-if (DH.read(rx_msg) == DH_PARSE_OK)
+DH.process();
 ~~~
 
 Each message contains the `intent` field, which would correspond to the intent
-identifier defined in initialization string. You *MUST* respond
-to `INTENT_REGISTRATION_REQUEST` by sending registration data back:
+identifier defined in initialization string. You *MUST* pass device registration
+data to the `DH.begin()` method. It allows to respond `INTENT_REGISTRATION_REQUEST`
+automatically by sending registration data back:
 
 ~~~{.cpp}
-switch (rx_msg.intent)
+DH.begin(Serial, REG_DATA);
+~~~
+
+DeviceHive library allows to register callback functions for command processing.
+One of these functions will be called automatically every time when a command
+with corresponding intent identifier is received.
+You should define functions for command processing.
+
+"set" command processor:
+
+~~~{.cpp}
+void processSetMsg(InputMessageEx& rx_msg, const long cmd_id)
 {
-    case INTENT_REGISTRATION_REQUEST:   // registration data needed
-        DH.writeRegistrationResponse(REG_DATA);
-        break;
+    const byte state = rx_msg.getByte();
+    setLedState(state);
+    DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
+}
 ~~~
 
-Handle "set" command:
+For "blink" command you should unload the received parameters values into the
+struct, then do the actual blinking and report command result back to gateway:
 
 ~~~{.cpp}
-    case 1000:
+void processBlinkMsg(InputMessageEx& rx_msg, const long cmd_id)
+{
+    BlinkParam params = rx_msg.get<BlinkParam>();
+
+    for (int i = 0; i < params.count; ++i)
     {
-        const long cmd_id = rx_msg.getULong();
-        const byte state = rx_msg.getByte();
-
-        setLedState(state);
-        DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
-    } break;
+        setLedState(1);     // ON
+        delay(params.on);
+        setLedState(0);     // OFF
+        delay(params.off);
+    }
+    DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
+}
 ~~~
 
-For "blink" command you should unload the received parameters values into the struct:
+For "text" command you should unload the received value into the text string,
+then display this value on LCD and report command result back to gateway:
 
 ~~~{.cpp}
-    case 1001:
-    {
-        const long cmd_id = rx_msg.getLong();
-        BlinkParam params = rx_msg.get<BlinkParam>();
-        ...
+void processTextMsg(InputMessageEx& rx_msg, const long cmd_id)
+{
+    unsigned int maxLen = rx_msg.length;
+    maxLen -= sizeof(long);
+    char msg[maxLen];
+    rx_msg.getString(msg, maxLen);
+    lcd.clear();
+    lcd.print(msg);
+    DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
+}
 ~~~
 
-do the actual blinking and report command result back to gateway:
+For "doubletext" command you should unload the received values one by one into
+the buffer, then display them on LCD and report command result back to gateway:
 
 ~~~{.cpp}
-        ...
-        for (int i = 0; i < params.count; ++i)
-        {
-            setLedState(1);     // ON
-            delay(params.on);
-            setLedState(0);     // OFF
-            delay(params.off);
-        }
+void processDoubletextMsg(InputMessageEx& rx_msg, const long cmd_id)
+{
+    char buf[64];
 
-        DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
-    } break;
-} // switch (intent)
+    // print first line
+    rx_msg.getString(buf, sizeof(buf));
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(buf);
+
+    // print second line
+    rx_msg.getString(buf, sizeof(buf));
+    lcd.setCursor(0, 1);
+    lcd.print(buf);
+
+    DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
+}
 ~~~
 
+When command processing functions are defined, you should register them into
+DeviceHive engine's buffer. Thus a correspondence between the intent identifier
+and the command processing function will be established.
+
+~~~{.cpp}
+    DH.registerCallback(1000, processSetMsg);
+    DH.registerCallback(1001, processBlinkMsg);
+    DH.registerCallback(1002, processTextMsg);
+    DH.registerCallback(1003, processDoubletextMsg);
+~~~
 
 Admin console
 -------------
@@ -188,9 +234,31 @@ Go to the "commands" tab and press the "enter new command" button. Then enter th
 `set` in the command name field and `1` or `0` in the parameters. You should see how
 on-board LED will change state.
 
-ALso you can enter `blink` command with any parameters, for example:
-`{"count":3,"on":1000,"off":500}` whith switches LED 3 times.
+Also you can enter `blink` command with any parameters, for example:
+`{"count":3,"on":1000,"off":500}` which switches LED 3 times.
 
+To send `text` command you should enter the `text` in the command name field and
+a text string in the parameters.
+
+To send `doubletext` command you should enter the `doubletext` in the command
+name field and a ucture containing two text strings in the parameters, for
+example:
+`{"s0":"Hello","s1":"world"}`
+
+
+Advanced Usage
+--------------
+
+In your custom message processing implementation you can respond to
+`INTENT_REGISTRATION_REQUEST` by sending registration data back:
+
+~~~{.cpp}
+switch (rx_msg.intent)
+{
+    case INTENT_REGISTRATION_REQUEST:   // registration data needed
+        DH.writeRegistrationResponse(REG_DATA);
+        break;
+~~~
 
 Conslusion
 ----------

@@ -19,34 +19,29 @@ Quick start
 
 Once DeviceHive Arduino library is installed you can use it. Just include `DeviceHive.h`
 into your sketch and do not forget to initialize DeviceHive engine with
-an appropriate serial port:
+an appropriate serial port, device registration data and optionally a buffer for
+received messages:
 
 ~~~{.cpp}
 #include <DeviceHive.h>
 
+const char *REG_DATA;
+// ...
 void setup()
 {
     // ...
     Serial.begin(9600);
-    DH.begin(Serial);
+    DH.begin(Serial, REG_DATA);
 }
 ~~~
 
 The second step is to listen for incomming messages and process them:
 
 ~~~{.cpp}
-InputMessage rx_msg;
 void loop()
 {
-    if (DH.read(rx_msg) == DH_PARSE_OK)
-    {
-        switch (rx_msg.intent)
-        {
-            ... // process message
-        }
-
-        rx_msg.reset();
-    }
+    // ...
+    DH.process();
 }
 ~~~
 
@@ -62,7 +57,8 @@ from the serial port and tries to parse messages.
 
 ### Initialization
 
-It's important to initialize DeviceHive engine with an appropriate serial port.
+It's important to initialize DeviceHive engine with an appropriate serial port
+and device registration data.
 A good place to do that is the `setup()` function. Usually, the `Serial` serial
 port is used, but some boards (such as Arduino Mega) also have additional
 [serial ports](http://arduino.cc/en/Reference/Serial):
@@ -70,9 +66,8 @@ port is used, but some boards (such as Arduino Mega) also have additional
 
 ~~~{.cpp}
 Serial.begin(9600);
-DH.begin(Serial);
+DH.begin(Serial, REG_DATA);
 ~~~
-
 
 ### Sending messages
 
@@ -93,31 +88,45 @@ There are also a few auxiliary *writeXXX* methods to send a system-defined messa
   - `DH.writeRegistrationResponse(data)` - sends registration data in JSON format.
   - `DH.writeCommandResult(id, status, result)` - sends command result as example above.
 
+### Command processing functions registration
+
+DeviceHive library allows to register callback functions for command processing.
+One of these functions will be called automatically every time when a command
+with corresponding intent identifier is received. Callback functions registration
+is performed in DeviceHive engine's method `DH.registerCallback()`. This method
+requires the message intent identifier and a pointer to a command processing
+function as parameters.
+
+~~~{.cpp}
+    DH.registerCallback(1000, processSetMsg);
+~~~
+
+Also DeviceHive library allows to unregister callback functions for command
+processing. It means that no function will correspond to specified message intent
+identifier. You should use the `DH.unregisterCallback()` method for this purpose.
+The `DH.unregisterCallback()` method requires the message intent identifier as
+a parameter.
+
+~~~{.cpp}
+    DH.unregisterCallback(1000);
+~~~
 
 ### Receiving messages
 
-Message receiving is a long-term process and it's performed in the `loop()`
-function. DeviceHive engine's `DH.read()` method tries to parse message header,
-receive message body and check message checksum.
+Message receiving is a long-term process and it's performed in DeviceHive
+engine's `DH.process()` method. This method tries to parse message header,
+receive message body and check message checksum. Input messages will be put to
+DeviceHive engine's internal buffer, if an external buffer was'n specified.
+To receive and process input messages you should call the `DH.process()` method
+from the `loop()` function.
 
 ~~~{.cpp}
-InputMessage rx_msg;
 void loop()
 {
-    if (DH.read(rx_msg) == DH_PARSE_OK)
-    {
-        switch (rx_msg.intent)
-        {
-            ... // process message
-        }
-
-        rx_msg.reset();
-    }
+    // ...
+    DH.process();
 }
 ~~~
-
-Note, `rx_msg` should be global variable because message usually is collected
-during several `loop()` calls.
 
 Once `DH.read()` method returns `DH_PARSE_OK` the received message can be processed.
 Other possible return values are usually errors:
@@ -194,6 +203,8 @@ Advanced Usage
 There are a few advanced usage practices:
   - messages with an external buffer
   - messages with custom static buffer size
+  - an external buffer for received messages at DeviceHive engine
+  - direct message processing
   - *stream* writing operations
 
 
@@ -240,7 +251,6 @@ receiving process. Otherwise, just because the byte buffer contains a part of
 receiving message, output message which uses the same buffer will override
 content of receiving input message.
 
-
 ### Custom static buffer size
 
 There is possible to use message class templates with static buffer size as
@@ -259,6 +269,50 @@ InputMessageN<1024> rx_msg;
 ...
 ~~~
 
+### An external buffer for received messages at DeviceHive engine
+
+You can provide a buffer for received messages at DeviceHive engine initialization.
+You should use an object of InputMessageEx class or any derived class as a
+buffer for received messages.
+
+~~~{.cpp}
+InputMessageEx msg(buf, buf_size);
+Serial.begin(9600);
+DH.begin(Serial, REG_DATA, *msg);
+~~~
+
+Unless a buffer for received messages was specified by user, it will be created
+automatically. The maximum payload size of a message which can be stored in
+automatically created internal buffer is statically defined by the `MAX_MSG_SIZE`
+constant which is 256 by default.
+
+### Direct message processing
+
+If you need to process messages directy (without using the `DH.process` method)
+you can use DeviceHive engine's `DH.read()`. It allows to specify custom
+performance of message receiving. The `DH.read()` method tries to parse message
+header, receive message body and check message checksum. In your custom message
+processing implementation you can use the `DH.read()` method. To check for new
+messages from the cloud in the `loop()` function, do this:
+
+~~~{.cpp}
+InputMessage rx_msg;
+void loop()
+{
+    if (DH.read(rx_msg) == DH_PARSE_OK)
+    {
+        switch (rx_msg.intent)
+        {
+            ... // process message
+        }
+
+        rx_msg.reset();
+    }
+}
+~~~
+
+Note, `rx_msg` should be global variable because message usually is collected
+during several `loop()` calls.
 
 ### Stream writing
 
