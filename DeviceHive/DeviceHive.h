@@ -9,10 +9,15 @@
 #   define MAX_MSG_SIZE 256
 #endif // MAX_MSG_SIZE
 
+#if !defined(MAX_CALLBACK_COUNT)
+#   define MAX_CALLBACK_COUNT 16
+#endif // MAX_CALLBACK_COUNT
+
 #define CMD_STATUS_SUCCESS          "Success"
 #define CMD_STATUS_FAILED           "Failed"
 #define CMD_RESULT_OK               "OK"
-#define CMD_RESULT_UNKNOWN_COMMAND  "UNKNOWN_COMMAND" 
+#define CMD_RESULT_UNKNOWN_COMMAND  "Unknown command"
+
 
 // basic message, uses external buffer
 class Message
@@ -30,6 +35,7 @@ public:
 };
 
 
+// intents
 enum Intent
 {
     INTENT_REGISTRATION_REQUEST         = 0,
@@ -85,7 +91,7 @@ public: // Arduino friendly names
 };
 
 
-// message + formatting, uses static buffer
+// message + formatting, uses internal buffer
 template<unsigned int N>
 class OutputMessageN:
     public OutputMessageEx
@@ -99,6 +105,8 @@ private:
     uint8_t static_buffer[N];
 };
 
+
+// output message with default buffer size
 typedef OutputMessageN<MAX_MSG_SIZE> OutputMessage;
 
 
@@ -158,7 +166,7 @@ private:
 };
 
 
-// message + parsing, uses static buffer
+// message + parsing, uses internal buffer
 template<unsigned int N>
 class InputMessageN:
     public InputMessageEx
@@ -172,6 +180,8 @@ private:
     uint8_t static_buffer[N];
 };
 
+
+// input message with default buffer size
 typedef InputMessageN<MAX_MSG_SIZE> InputMessage;
 
 
@@ -186,6 +196,7 @@ enum ParseResult
     DH_PARSE_NO_SERIAL
 };
 
+
 // engine: read/write messages from/to serial stream
 class DeviceHive
 {
@@ -194,16 +205,23 @@ public:
 
     void setRxTimeout(unsigned long ms);
 
-    void begin(Stream *stream, const char *reg_data, InputMessageEx* msg = 0);
-    void begin(Stream &stream, const char *reg_data, InputMessageEx* msg = 0);
+    void begin(Stream *stream, const char *reg_data,
+               InputMessageEx* rx_buf = 0);
+    void begin(Stream &stream, const char *reg_data,
+               InputMessageEx* rx_buf = 0);
     void end();
 
-    typedef void (*CallbackType)(InputMessageEx&, const long);
-    void registerCallback(int id, CallbackType f);
-    void unregisterCallback(int id);
-    void process();
+public: // command callbacks
+    typedef void (*Callback)(InputMessageEx&, long);
+
+    void registerCallback(uint16_t intent, Callback cb);
+    void unregisterCallback(uint16_t intent);
+private:
+    int findCallbackIndex(uint16_t intent);
 
 public:
+    void process();
+
     int read(Message *msg);
     int read(Message &msg);
 
@@ -222,16 +240,10 @@ public:
     unsigned int writeUInt32(uint32_t val);
     unsigned int writeUInt16(uint16_t val);
     void writeChecksum(unsigned int checksum);
-    
-private:
-    int findCmdProcessorIndex(int id);
-    CallbackType findCmdProcessor(int id);
 
 private:
     Stream *stream;             // Serial stream
     unsigned int rx_timeout;    // RX timeout, milliseconds
-    
-    static const int CMD_PROCESSOR_COUNT = 16;
 
     enum ParserState            // possible parser states
     {
@@ -246,30 +258,22 @@ private:
         STATE_PAYLOAD,
         STATE_CHECKSUM
     };
-    
-    struct CmdProcessor
-    {
-        CmdProcessor(): id(0), func(0)
-        {
-        }
-        
-        CmdProcessor(int num, CallbackType f): id(num), func(f)
-        {
-        }
-
-        int id;
-        CallbackType func;
-    };
 
     const char*     reg_data;         // device registration data
-    InputMessageEx* rx_msg;           // received message
-    bool            is_buffer_ext;    // is received message buffer external
+    InputMessageEx* rx_msg;           // received message buffer (external or internal)
+    bool            is_rx_msg_ext;    // is received message buffer external
+
     ParserState     rx_state;         // RX parser state
     uint16_t        rx_msg_len;       // expected message payload length
     unsigned int    rx_checksum;      // RX checksum register
     unsigned long   rx_started_at;    // RX message start time, milliseconds
-    CmdProcessor    cmd_processors[CMD_PROCESSOR_COUNT];
-    int             last_cmd_processor;
+
+    // callback table
+    struct
+    {
+        uint16_t intent;
+        Callback func;
+    } cmd_callbacks[MAX_CALLBACK_COUNT];
 };
 
 

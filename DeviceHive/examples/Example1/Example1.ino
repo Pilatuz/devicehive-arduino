@@ -1,8 +1,5 @@
 #include <DeviceHive.h>
 
-#define CMD_STATUS_SUCCESS      "Success"
-#define CMD_STATUS_FAILED       "Failed"
-#define CMD_RESULT_OK           "OK"
 
 // device registration data
 // intent numbers should be greater than 255!
@@ -19,7 +16,7 @@ const char *REG_DATA = "{"
         "{intent:1000,name:'set',params:u8},"
         "{intent:1001,name:'blink',params:{on:u16,off:u16,count:u8}},"
         "{intent:1002,name:'text',params:s},"
-        "{intent:1003,name:'doubletext',params:{s0:s,s1:s}}"
+        "{intent:1003,name:'text2',params:{s0:s,s1:s}}"
     "],"
     "notifications:["
         "{intent:2000,name:'button',params:u8}"
@@ -69,14 +66,18 @@ enum LcdKeys
     KEY_SELECT  = 0x10
 };
 
-void processSetMsg(InputMessageEx& rx_msg, const long cmd_id)
+
+// process 'set' command
+void processSetCmd(InputMessageEx& rx_msg, const long cmd_id)
 {
     const byte state = rx_msg.getByte();
     setLedState(state);
     DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
 }
 
-void processBlinkMsg(InputMessageEx& rx_msg, const long cmd_id)
+
+// process 'blink' command
+void processBlinkCmd(InputMessageEx& rx_msg, const long cmd_id)
 {
     BlinkParam params = rx_msg.get<BlinkParam>();
     // TODO: check for very long delays?
@@ -88,37 +89,45 @@ void processBlinkMsg(InputMessageEx& rx_msg, const long cmd_id)
         setLedState(0);     // OFF
         delay(params.off);
     }
+
     DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
 }
 
-void processTextMsg(InputMessageEx& rx_msg, const long cmd_id)
-{
-    unsigned int maxLen = rx_msg.length;
-    maxLen -= sizeof(long);
-    char msg[maxLen];
-    rx_msg.getString(msg, maxLen);
-    lcd.clear();
-    lcd.print(msg);
-    DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
-}
 
-void processDoubletextMsg(InputMessageEx& rx_msg, const long cmd_id)
+// process 'text' command
+void processTextCmd(InputMessageEx& rx_msg, const long cmd_id)
 {
-    char buf[64];
-
-    // print first line
-    rx_msg.getString(buf, sizeof(buf));
+    char text[256];
     lcd.clear();
+
+    // read and print line
+    rx_msg.getString(text, sizeof(text));
     lcd.setCursor(0, 0);
-    lcd.print(buf);
-
-    // print second line
-    rx_msg.getString(buf, sizeof(buf));
-    lcd.setCursor(0, 1);
-    lcd.print(buf);
+    lcd.print(text);
 
     DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
 }
+
+
+// process 'text2' command
+void processText2Cmd(InputMessageEx& rx_msg, const long cmd_id)
+{
+    char text[256];
+    lcd.clear();
+
+    // read and print first line
+    rx_msg.getString(text, sizeof(text));
+    lcd.setCursor(0, 0);
+    lcd.print(text);
+
+    // read and print second line
+    rx_msg.getString(text, sizeof(text));
+    lcd.setCursor(0, 1);
+    lcd.print(text);
+
+    DH.writeCommandResult(cmd_id, CMD_STATUS_SUCCESS, CMD_RESULT_OK);
+}
+
 
 /**
  * Initializes the Arduino firmware.
@@ -134,15 +143,16 @@ void setup(void)
     Serial.begin(115200);
     DH.begin(Serial, REG_DATA);
     DH.writeRegistrationResponse(REG_DATA);
-    
-    DH.registerCallback(1000, processSetMsg); // "set" - sets the LED state
-    DH.registerCallback(1001, processBlinkMsg); // "blink" - blinks the LED
-    DH.registerCallback(1002, processTextMsg); // "text"
-    DH.registerCallback(1003, processDoubletextMsg); // "doubletext"
-    
+
+    DH.registerCallback(1000, processSetCmd);   // "set" - sets the LED state
+    DH.registerCallback(1001, processBlinkCmd); // "blink" - blinks the LED
+    DH.registerCallback(1002, processTextCmd);  // "text"
+    DH.registerCallback(1003, processText2Cmd); // "text2"
+
     lcd.setCursor(0,0);
     lcd.print("Hello");
 }
+
 
 /**
  * Loop procedure is called continuously.
@@ -163,8 +173,11 @@ void loop(void)
         }
     }
 
+
+    // do actual processing
     DH.process();
 }
+
 
 /**
  * @brief Get pressed key on LCD Keypad Shield.
